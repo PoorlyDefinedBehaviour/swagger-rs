@@ -1,0 +1,9 @@
+fn main() {
+  Router::new().route("/users", post(handler))
+}
+
+struct RequestBody {
+  pub username: String,
+}
+
+async fn handler(request_body: RequestBody) {}

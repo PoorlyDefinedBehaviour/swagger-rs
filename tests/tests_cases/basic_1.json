@@ -1,0 +1,24 @@
+{
+  "paths": {
+    "/users": {
+      "post": {
+        "summary": "TODO",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "username": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
