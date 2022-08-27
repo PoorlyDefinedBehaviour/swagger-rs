@@ -1,5 +1,5 @@
 fn main() {
-  Router::new().route("/users", post(handler))
+  Router::new().route("/users", post(handler));
 }
 
 struct RequestBody {

@@ -1,7 +1,11 @@
+use serde::Serialize;
 use std::{collections::HashMap, fs::File, io::Read};
-
-use syn::{Expr, Item, Stmt};
+use syn::{token::Return, Expr, ExprMethodCall, Item, Stmt};
 mod item;
+mod method_call;
+
+#[cfg(test)]
+mod tests;
 
 #[derive(Debug, PartialEq, Eq)]
 struct Controller {
@@ -15,14 +19,13 @@ fn main() {
   run("/home/bruno/dev/rust/swagger/src/test.rs").unwrap();
 }
 
-fn run(path: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn run(path: &str) -> Result<String, Box<dyn std::error::Error>> {
   let mut file = File::open(path).expect("Unable to open file");
 
   let mut src = String::new();
   file.read_to_string(&mut src).expect("Unable to read file");
 
   let syntax = syn::parse_file(&src).expect("Unable to parse file");
-  dbg!(&syntax.items);
 
   let mut routes = HashMap::new();
 
@@ -39,50 +42,21 @@ fn run(path: &str) -> Result<(), Box<dyn std::error::Error>> {
         fn_declarations.insert(func.sig.ident.to_string(), func.clone());
 
         for stmt in func.block.stmts.into_iter() {
-          if let Stmt::Local(local_stmt) = stmt {
-            if let Some(init) = local_stmt.init {
-              if let Expr::MethodCall(method_call) = *init.1 {
-                // Calling Router.route("/path", method(controller))
-                if method_call.method != "route" {
-                  continue;
+          // if let Stmt::Expr()
+          match stmt {
+            Stmt::Item(_) => continue,
+            Stmt::Expr(_) => {
+              todo!()
+            }
+            Stmt::Semi(expr, _tokens) => match expr {
+              Expr::MethodCall(method_call) => handle_method_call(&mut routes, method_call),
+              _ => continue,
+            },
+            Stmt::Local(local_stmt) => {
+              if let Some(init) = local_stmt.init {
+                if let Expr::MethodCall(method_call) = *init.1 {
+                  handle_method_call(&mut routes, method_call)
                 }
-
-                let route = match &method_call.args[0] {
-                  Expr::Lit(lit) => match &lit.lit {
-                    syn::Lit::Str(path) => path.value(),
-                    _ => continue,
-                  },
-                  _ => continue,
-                };
-
-                dbg!(&method_call.args);
-                let (method, controller) = match &method_call.args[1] {
-                  Expr::Call(call) => {
-                    let method = match &*call.func {
-                      Expr::Path(path) => path.path.segments.last().unwrap().ident.to_string(),
-                      _ => continue,
-                    };
-
-                    let controller = match call.args.last().unwrap() {
-                      Expr::Path(path) => path.path.segments.last().unwrap().ident.to_string(),
-                      _ => continue,
-                    };
-
-                    (method, controller)
-                  }
-
-                  _ => continue,
-                };
-
-                routes.insert(
-                  route,
-                  Controller {
-                    method,
-                    name: controller,
-                    request_body: None,
-                    response_body: None,
-                  },
-                );
               }
             }
           }
@@ -99,6 +73,8 @@ fn run(path: &str) -> Result<(), Box<dyn std::error::Error>> {
     fn_declarations.keys().collect::<Vec<_>>()
   );
 
+  dbg!(&fn_declarations);
+
   println!(
     "found structs: {:?}",
     structs
@@ -107,19 +83,87 @@ fn run(path: &str) -> Result<(), Box<dyn std::error::Error>> {
       .collect::<Vec<_>>()
   );
 
-  /*
-  "/foo": Controller {
-    method: "post"
-    name: "post_foo",
-    request_body: PostFooRequestBody {
-      pub username: String
-    }
-    response_body: PostFooResponseBody {
-      pub id: String
-    }
-    TODO: headers, path params, etc
-  }
-  */
+  let resource = Resource {
+    paths: {
+      let mut paths = HashMap::new();
 
-  Ok(())
+      for (path, controller) in routes {
+        paths.insert(
+          path,
+          HashMap::from([(
+            controller.method,
+            Path {
+              summary: Some(String::from("TODO")),
+              request_body: RequestBody {
+                required: true,
+                content: Content {
+                  content_type: ContentType {
+                    schema: Schema {
+                      r#type: String::from("object"),
+                      properties: HashMap::from([(
+                        String::from("username"),
+                        Type {
+                          r#type: String::from("string"),
+                        },
+                      )]),
+                    },
+                  },
+                },
+              },
+            },
+          )]),
+        );
+      }
+
+      paths
+    },
+  };
+
+  Ok(serde_json::to_string_pretty(&resource)?)
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Resource {
+  pub paths: HashMap<String, HashMap<String, Path>>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Path {
+  pub summary: Option<String>,
+  pub request_body: RequestBody,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RequestBody {
+  pub required: bool,
+  pub content: Content,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Content {
+  #[serde(rename = "application/json")]
+  pub content_type: ContentType,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ContentType {
+  pub schema: Schema,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Schema {
+  pub r#type: String,
+  pub properties: HashMap<String, Type>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Type {
+  pub r#type: String,
 }
