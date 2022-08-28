@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
-use difference::Changeset;
 use semaphore::Semaphore;
+
+use tracing_subscriber::{layer::SubscriberExt, EnvFilter, Registry};
 
 use crate::run;
 
@@ -9,6 +10,10 @@ mod semaphore;
 
 #[test]
 fn runner() -> Result<(), Box<dyn std::error::Error>> {
+  let subscriber = Registry::default().with(EnvFilter::from_env("RUST_LOG"));
+
+  tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
+
   let sema = Arc::new(Semaphore::new(10));
 
   let mut handles = vec![];
@@ -26,8 +31,8 @@ fn runner() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let sema_clone = Arc::clone(&sema);
-    dbg!(&path);
-    if !path.ends_with("2.input") {
+
+    if !path.ends_with("basic_1.input") {
       continue;
     }
 
@@ -41,9 +46,12 @@ fn runner() -> Result<(), Box<dyn std::error::Error>> {
       let output_file_path = path.replace(".input", ".json");
 
       let expected = std::fs::read_to_string(&output_file_path).unwrap();
-      println!("{}", actual);
-      println!("{}", expected);
-      assert_eq!(actual, expected);
+
+      assert_eq!(
+        expected, actual,
+        "\nexpected: {} \ngot: {}",
+        expected, actual
+      );
     }));
   }
 

@@ -4,6 +4,12 @@ fn main() {
 
 struct RequestBody {
   pub username: String,
+  pub optional_field: Option<f32>,
+  pub other: Other,
 }
 
-async fn handler(request_body: RequestBody) {}
+struct Other {
+  pub value: i32
+}
+
+async fn handler(Json(request_body): Json<RequestBody>) {}

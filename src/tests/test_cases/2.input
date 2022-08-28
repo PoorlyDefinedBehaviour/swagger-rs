@@ -1,6 +1,6 @@
 fn main() {
   let app = Router::new()
-    .route("/json", get(json));
+    .route("/json", post(json));
 }
 
 async fn json(Json(payload): Json<serde_json::Value>) {}

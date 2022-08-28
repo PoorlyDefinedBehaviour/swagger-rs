@@ -1,0 +1,19 @@
+{
+  "paths": {
+    "/json": {
+      "post": {
+        "summary": "TODO",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
