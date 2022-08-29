@@ -12,4 +12,14 @@ struct Other {
   pub value: i32
 }
 
-async fn handler(Json(request_body): Json<RequestBody>) {}
+struct Params {
+  pub limit: i32,
+  pub offset: i32
+}
+
+async fn handler(
+  Query(params): Query<Params>, 
+  Json(request_body): Json<RequestBody>
+) {
+  
+}

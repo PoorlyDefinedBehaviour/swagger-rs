@@ -1,12 +1,13 @@
 use lazy_static::lazy_static;
 use regex::Regex;
-use serde::{de::IntoDeserializer, Serialize};
+use serde::Serialize;
+
 use std::{collections::HashMap, fs::File, io::Read};
-use syn::{token::Return, Expr, ExprMethodCall, Item, ItemFn, ItemStruct, Stmt, TypePath};
-use tracing::debug;
-mod funcs;
+use syn::{Expr, ExprMethodCall, Item, ItemFn, ItemStruct, Stmt};
+
+mod ast;
+mod axum;
 mod item;
-mod method_call;
 
 #[cfg(test)]
 mod tests;
@@ -32,57 +33,6 @@ struct Component {
   pub field_name: Option<String>,
 }
 
-#[derive(Debug)]
-struct FnDeclaration {
-  pub parameters: Vec<FnParameter>,
-}
-
-#[derive(Debug)]
-struct FnParameter {
-  pub path: Option<Vec<String>>,
-  pub pattern: Vec<String>,
-  pub r#type: Vec<Segment>,
-}
-
-impl FnParameter {
-  fn is_json_request_body(&self) -> bool {
-    match &self.path {
-      None => false,
-      Some(path) => path.last().map(|s| s.as_ref()) == Some("Json"),
-    }
-  }
-
-  fn full_path_inner_type(&self) -> String {
-    self
-      .r#type
-      .iter()
-      .map(|segment| segment.full_path_inner_type())
-      .collect::<Vec<_>>()
-      .join("::")
-  }
-}
-
-#[derive(Debug)]
-struct SimplifiedTypePath {
-  pub segments: Vec<Segment>,
-}
-
-#[derive(Debug)]
-struct Segment {
-  pub ident: String,
-  pub arguments: Vec<String>,
-}
-
-impl Segment {
-  fn full_path(&self) -> String {
-    format!("{}<{}>", self.ident, self.arguments.join("::"))
-  }
-
-  fn full_path_inner_type(&self) -> String {
-    self.arguments.join("::")
-  }
-}
-
 fn main() {
   run("/home/bruno/dev/rust/swagger/src/test.rs").unwrap();
 }
@@ -97,7 +47,7 @@ struct AstTraverser {
   structs: HashMap<String, ItemStruct>,
   routes: HashMap<String, RouteHandler>,
   used_types: Vec<String>,
-  fn_declarations: HashMap<String, FnDeclaration>,
+  fn_declarations: HashMap<String, ItemFn>,
   components: HashMap<String, Vec<Component>>,
 }
 
@@ -112,62 +62,6 @@ impl AstTraverser {
     }
   }
 
-  fn item_fn_to_fn_declaration(&self, func: &ItemFn) -> FnDeclaration {
-    dbg!(func);
-    let parameters: Vec<_> = func
-      .sig
-      .inputs
-      .iter()
-      .map(|input| match input {
-        syn::FnArg::Receiver(_) => todo!(),
-        syn::FnArg::Typed(pat_type) => {
-          let (path, pattern) = match &*pat_type.pat {
-            syn::Pat::TupleStruct(tuple_struct) => {
-              let path = if tuple_struct.path.segments.is_empty() {
-                None
-              } else {
-                Some(
-                  tuple_struct
-                    .path
-                    .segments
-                    .iter()
-                    .map(|segment| segment.ident.to_string())
-                    .collect::<Vec<_>>(),
-                )
-              };
-
-              let pattern = tuple_struct
-                .pat
-                .elems
-                .iter()
-                .map(|elem| match elem {
-                  syn::Pat::Ident(ident) => ident.ident.to_string(),
-                  _ => todo!(),
-                })
-                .collect::<Vec<_>>();
-
-              (path, pattern)
-            }
-            _ => todo!(),
-          };
-
-          let r#type = match &*pat_type.ty {
-            syn::Type::Path(type_path) => self.type_path_to_simplified_path(type_path),
-            _ => todo!(),
-          };
-
-          FnParameter {
-            path,
-            pattern,
-            r#type: r#type.segments,
-          }
-        }
-      })
-      .collect();
-
-    FnDeclaration { parameters }
-  }
-
   pub fn traverse(&mut self, syntax: syn::File) {
     for item in syntax.items.into_iter() {
       match item {
@@ -177,17 +71,12 @@ impl AstTraverser {
         Item::Fn(func) => {
           let func_name = func.sig.ident.to_string();
           if func_name != "main" {
-            self
-              .fn_declarations
-              .insert(func_name, self.item_fn_to_fn_declaration(&func));
+            self.fn_declarations.insert(func_name, func.clone());
           }
 
           for stmt in func.block.stmts.into_iter() {
             match stmt {
-              Stmt::Item(_) => continue,
-              Stmt::Expr(_) => {
-                todo!()
-              }
+              Stmt::Item(_) | Stmt::Expr(_) => continue,
               Stmt::Semi(expr, _tokens) => match expr {
                 Expr::MethodCall(method_call) => self.handle_method_call(method_call),
                 _ => continue,
@@ -248,71 +137,6 @@ impl AstTraverser {
     );
   }
 
-  fn get_function_parameters(&self, func: &ItemFn) -> Vec<String> {
-    let mut params = Vec::with_capacity(func.sig.inputs.len());
-    /*
-        for input in func.sig.inputs.into_iter() {
-          match input {
-            syn::FnArg::Receiver(_) => todo!(),
-            syn::FnArg::Typed(pat_type) => match *pat_type.pat {
-              syn::Pat::Box(_) => todo!(),
-              syn::Pat::Ident(_) => todo!(),
-              syn::Pat::Lit(_) => todo!(),
-              syn::Pat::Macro(_) => todo!(),
-              syn::Pat::Or(_) => todo!(),
-              syn::Pat::Path(_) => todo!(),
-              syn::Pat::Range(_) => todo!(),
-              syn::Pat::Reference(_) => todo!(),
-              syn::Pat::Rest(_) => todo!(),
-              syn::Pat::Slice(_) => todo!(),
-              syn::Pat::Struct(_) => todo!(),
-              syn::Pat::Tuple(_) => todo!(),
-              syn::Pat::Type(_) => todo!(),
-              syn::Pat::Verbatim(_) => todo!(),
-              syn::Pat::Wild(_) => todo!(),
-              syn::Pat::TupleStruct(tuple_struct) => {
-                let segments = tuple_struct
-                  .path
-                  .segments
-                  .iter()
-                  .map(|segment| segment.ident.to_string())
-                  .collect::<Vec<_>>()
-                  .join("::");
-
-                let patterns = tuple_struct
-                  .pat
-                  .elems
-                  .iter()
-                  .map(|elem| match elem {
-                    syn::Pat::Box(_) => todo!(),
-                    syn::Pat::Lit(_) => todo!(),
-                    syn::Pat::Macro(_) => todo!(),
-                    syn::Pat::Or(_) => todo!(),
-                    syn::Pat::Path(_) => todo!(),
-                    syn::Pat::Range(_) => todo!(),
-                    syn::Pat::Reference(_) => todo!(),
-                    syn::Pat::Rest(_) => todo!(),
-                    syn::Pat::Slice(_) => todo!(),
-                    syn::Pat::Struct(_) => todo!(),
-                    syn::Pat::Tuple(_) => todo!(),
-                    syn::Pat::TupleStruct(_) => todo!(),
-                    syn::Pat::Type(_) => todo!(),
-                    syn::Pat::Verbatim(_) => todo!(),
-                    syn::Pat::Wild(_) => todo!(),
-                    syn::Pat::Ident(ident) => ident.ident.to_string(),
-                    _ => todo!(),
-                  })
-                  .collect::<Vec<_>>()
-                  .join(", ");
-              }
-              _ => todo!(),
-            },
-          }
-        }
-    */
-    params
-  }
-
   pub fn build_type_components(&mut self) {
     for used_type in self.used_types.clone().iter() {
       let struct_ = self.structs.get(used_type).cloned();
@@ -352,72 +176,13 @@ impl AstTraverser {
   fn build_type_components_from_struct(&mut self, struct_: &ItemStruct) {
     let struct_name = struct_.ident.to_string();
 
-    println!(
-      "aaaaaa setting struct name initial components to empty struct_name={}",
-      &struct_name
-    );
     self.components.insert(struct_name.clone(), vec![]);
 
     for field in struct_.fields.iter() {
-      /*
-      struct RequestBody {
-        pub username: String,
-        pub something: Something
-      }
-
-      struct Something {
-        pub value: i32
-      }
-
-      async fn handler(Json(request_body): Json<RequestBody>) {}
-
-      */
       let field_name = field.ident.clone().unwrap().to_string();
 
       self.build_type_components_from_type(&struct_name, &field_name, &field.ty);
     }
-  }
-
-  fn type_path_to_simplified_path(&self, type_path: &TypePath) -> SimplifiedTypePath {
-    let segments = type_path
-      .path
-      .segments
-      .iter()
-      .map(|segment| {
-        let ident = segment.ident.to_string();
-
-        let arguments = match &segment.arguments {
-          syn::PathArguments::None => vec![],
-          syn::PathArguments::AngleBracketed(args) => args
-            .args
-            .iter()
-            .filter_map(|arg| match arg {
-              syn::GenericArgument::Lifetime(_)
-              | syn::GenericArgument::Binding(_)
-              | syn::GenericArgument::Constraint(_)
-              | syn::GenericArgument::Const(_) => None,
-              syn::GenericArgument::Type(typ) => match typ {
-                syn::Type::Path(type_path) => Some(
-                  type_path
-                    .path
-                    .segments
-                    .iter()
-                    .map(|segment| segment.ident.to_string())
-                    .collect::<Vec<_>>()
-                    .join("::"),
-                ),
-                _ => unreachable!(),
-              },
-            })
-            .collect(),
-          syn::PathArguments::Parenthesized(_) => todo!(),
-        };
-
-        Segment { ident, arguments }
-      })
-      .collect::<Vec<_>>();
-
-    SimplifiedTypePath { segments }
   }
 
   fn build_type_components_from_type(
@@ -441,8 +206,6 @@ impl AstTraverser {
       syn::Type::TraitObject(_) => todo!(),
       syn::Type::Verbatim(_) => todo!(),
       syn::Type::Path(type_path) => {
-        dbg!(&type_path);
-
         let segment = type_path
           .path
           .segments
@@ -512,7 +275,6 @@ impl AstTraverser {
                   .map(|matches| matches.as_str().to_string())
                   .unwrap_or_else(|| segment),
               });
-            dbg!(&self.components);
           }
           Some(struct_) => {
             // We found a field that has a struct type:
@@ -570,6 +332,35 @@ impl AstTraverser {
               controller.method.clone(),
               Path {
                 summary: Some(String::from("TODO")),
+                parameters: {
+                  let parameters = Vec::new();
+
+                for parameter in controller_fn
+                .sig
+                .inputs
+                .iter()
+                .filter(|parameter| axum::is_query_param(parameter)) {
+                  parameters
+                }
+                controller_fn
+                  .sig
+                  .inputs
+                  .iter()
+                  .filter(|parameter| axum::is_query_param(parameter))
+                  .map(|parameter| Parameter {
+                    name: ast::param_name(parameter),
+                    r#in: String::from("query"),
+                    description: String::from("TODO"),
+                    required: true,
+                    explode: false,
+                    schema: ParameterSchema::Integer {
+                      r#type: String::from("integer"),
+                      format: String::from("int64"),
+                    },
+                  })
+                  .collect();
+                parameters
+                },
                 request_body: RequestBody {
                   // TODO: fixme
                   required: true,
@@ -578,12 +369,13 @@ impl AstTraverser {
                       schema: Schema::Ref {
                         r#ref: format!(
                           "#/components/schemas/{}",
-                          controller_fn
-                            .parameters
-                            .iter()
-                            .find(|param| param.is_json_request_body())
-                            .map(|param| param.full_path_inner_type())
-                            .unwrap()
+                          "TODO",
+                          /*controller_fn
+                          .parameters
+                          .iter()
+                          .find(|param| param.is_json_request_body())
+                          .map(|param| param.full_path_inner_type())
+                          .unwrap()*/
                         ),
                       },
                     },
@@ -607,7 +399,6 @@ impl AstTraverser {
         let mut components = HashMap::new();
 
         for (type_name, fields) in self.components.iter() {
-          dbg!(fields);
           components.insert(
             type_name.clone(),
             ResourceComponent {
@@ -645,7 +436,7 @@ impl AstTraverser {
   fn debug(&self) {
     println!("found routes {:?}", self.routes);
 
-    println!("found functions: {:?}", self.fn_declarations);
+    println!("found functions: {:#?}", self.fn_declarations);
 
     println!(
       "found structs: {:?}",
@@ -756,8 +547,38 @@ struct ResourceComponent {
 struct Path {
   pub summary: Option<String>,
   pub description: String,
+  pub parameters: Vec<Parameter>,
   pub request_body: RequestBody,
   pub responses: HashMap<String, Response>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Parameter {
+  pub name: String,
+  pub r#in: String,
+  pub description: String,
+  pub required: bool,
+  // TODO: what does this even mean?
+  pub explode: bool,
+  pub schema: ParameterSchema,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum ParameterSchema {
+  Enum {
+    r#type: String,
+    default: String,
+    r#enum: Vec<String>,
+  },
+  Array {
+    r#type: String,
+    items: Type,
+  },
+  Primitive {
+    r#type: String,
+  },
 }
 
 #[derive(Debug, Serialize)]
@@ -801,7 +622,7 @@ enum Schema {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-enum Type {
+pub enum Type {
   Primitive {
     r#type: String,
   },
